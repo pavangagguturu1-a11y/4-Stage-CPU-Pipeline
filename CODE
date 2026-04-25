@@ -1,0 +1,126 @@
+4-Stage Pipeline Stages
+1.	IF (Instruction Fetch)
+o	Fetch instruction from memory.
+2.	ID (Instruction Decode & Register Fetch)
+o	Decode instruction.
+o	Read registers.
+3.	EX (Execute / ALU Operation / Address Calculation)
+o	Perform arithmetic or address calculation.
+4.	MEM/WB (Memory Access or Write Back)
+o	Load instruction: access memory.
+o	Arithmetic instructions: write result to register.
+
+Supported Instructions
+•	ADD R1, R2, R3 → R1 = R2 + R3
+•	SUB R1, R2, R3 → R1 = R2 - R3
+•	LOAD R1, 100(R2) → R1 = MEM[R2 + 100]
+
+
+
+
+
+Verilog CPU Core (pipeline.v)
+module cpu4 (
+    input clk, reset
+);
+    // Pipeline registers
+    reg [31:0] IFID_instr;
+    reg [31:0] IDEX_instr;
+    reg [31:0] EXMEM_instr;
+    reg [31:0] MEMWB_instr;
+    reg [31:0] IDEX_rs1, IDEX_rs2;
+    reg [31:0] EXMEM_alu_out;
+    reg [31:0] MEMWB_mem_data;
+
+    // Register file and memory
+    reg [31:0] regs [0:7];
+    reg [31:0] mem [0:255];
+    initial begin
+        regs[0]=0; regs[1]=0; regs[2]=0; regs[3]=0;
+        regs[4]=0; regs[5]=0; regs[6]=0; regs[7]=0;
+        integer i; for (i = 0; i < 256; i = i+1) mem[i] = i + 100;
+    end
+    // Simple program memory
+    reg [31:0] imem [0:15];
+    initial begin
+        // Instructions: opcode[31:24], rd[23:16], rs1[15:8], rs2/immed[7:0]
+        imem[0] = {8'h02,8'd1,8'd0,8'd10}; // LOAD R1, 10(R0)
+        imem[1] = {8'h00,8'd2,8'd1,8'd1};  // ADD  R2, R1, R1
+        imem[2] = {8'h01,8'd3,8'd2,8'd1};  // SUB  R3, R2, R1
+        imem[3] = {8'h00,8'd4,8'd3,8'd2};  // ADD  R4, R3, R2
+        imem[4] = 32'hxxxxxxxx;
+    end
+    reg [3:0] pc;
+    // Pipeline stages
+    always @(posedge clk or posedge reset) begin
+        if (reset) begin
+            pc <= 0;
+            IFID_instr <= 0; IDEX_instr <= 0;
+            EXMEM_instr <= 0; MEMWB_instr <= 0;
+        end else begin
+            // 4. MEM/WB: write results
+            if (MEMWB_instr[31:24] == 8'h00) regs[MEMWB_instr[23:16]] <= MEMWB_mem_data;
+            else if (MEMWB_instr[31:24] == 8'h01) regs[MEMWB_instr[23:16]] <= MEMWB_mem_data;
+            else if (MEMWB_instr[31:24] == 8'h02) regs[MEMWB_instr[23:16]] <= MEMWB_mem_data;
+            // Shift pipeline regs
+            MEMWB_instr <= EXMEM_instr;
+            EXMEM_instr <= IDEX_instr;
+            IDEX_instr <= IFID_instr;
+            IFID_instr <= imem[pc];
+            // Register reads
+            IDEX_rs1 <= regs[IFID_instr[15:8]];
+            IDEX_rs2 <= (IFID_instr[31:24]==8'h02) 
+                        ? {{24{IFID_instr[7]}}, IFID_instr[7:0]} // sign-extend immediate
+                        : regs[IFID_instr[7:0]];
+           // ALU/MEM
+            if (EXMEM_instr[31:24]==8'h00) EXMEM_alu_out <= regs[EXMEM_instr[15:8]] + regs[EXMEM_instr[7:0]];
+            else if (EXMEM_instr[31:24]==8'h01) EXMEM_alu_out <= regs[EXMEM_instr[15:8]] - regs[EXMEM_instr[7:0]];
+            else if (EXMEM_instr[31:24]==8'h02) EXMEM_alu_out <= regs[EXMEM_instr[15:8]] + {{24{EXMEM_instr[7]}},EXMEM_instr[7:0]};
+            // Memory access value passed to WB
+            if (MEMWB_instr[31:24]==8'h02) MEMWB_mem_data <= mem[MEMWB_instr[15:8] + {{24{MEMWB_instr[7]}},MEMWB_instr[7:0]}];
+            else MEMWB_mem_data <= EXMEM_alu_out;
+            // PC update
+            pc <= pc + 1;
+        end
+    end
+endmodule
+
+
+
+
+
+
+
+
+
+
+
+Testbench (tb_cpu4.v)
+
+`timescale 1ns/1ps
+module tb_cpu4;
+    reg clk = 0, reset = 1;
+    cpu4 uut (.clk(clk), .reset(reset));
+    always #5 clk = ~clk; // 10 ns clock period
+    initial begin
+        $dumpfile("cpu4.vcd");
+        $dumpvars(0, tb_cpu4);
+        #10 reset = 0;
+        #200 $finish;
+    end
+endmodule
+
+
+
+
+Simulation
+iverilog -o cpu4.vvp pipeline.v tb_cpu4.v
+vvp cpu4.vvp
+
+
+
+•	IFID_instr → IDEX_instr → EXMEM_instr → MEMWB_instr shift each cycle.
+•	regs[1] updated after LOAD in stage 4.
+•	Subsequent ADD/SUB using newly-written register values in later cycles.
+•	Overlap of instructions with no pipeline stalls (hazards ignored for simplicity).
+
